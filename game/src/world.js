@@ -75,15 +75,68 @@ function segmentHitsRect(x1, z1, x2, z2, minX, maxX, minZ, maxZ) {
 export function createWorld(scene) {
   const group = new THREE.Group();
   scene.add(group);
+
+  // Procedural surface detail, drawn once on canvases with a seeded PRNG so every build
+  // textures identically: a speckled scrub texture for the ground and a corrugated-rib
+  // texture that multiplies every block colour, so flat palette boxes read as concrete,
+  // crates and container steel instead of plain slabs.
+  function canvasTexture(size, draw, repeatX, repeatY) {
+    const canvas = document.createElement('canvas');
+    canvas.width = size[0];
+    canvas.height = size[1];
+    draw(canvas.getContext('2d'), size[0], size[1]);
+    const tex = new THREE.CanvasTexture(canvas);
+    tex.wrapS = THREE.RepeatWrapping;
+    tex.wrapT = THREE.RepeatWrapping;
+    tex.repeat.set(repeatX, repeatY);
+    tex.anisotropy = 4;
+    tex.colorSpace = THREE.SRGBColorSpace;
+    return tex;
+  }
+  let seed = 20261116;
+  const rnd = () => {
+    seed = (seed * 1664525 + 1013904223) >>> 0;
+    return seed / 4294967296;
+  };
+  const groundTex = canvasTexture([256, 256], (g, w, h) => {
+    g.fillStyle = PALETTE.grass;
+    g.fillRect(0, 0, w, h);
+    for (let i = 0; i < 2400; i++) {
+      const v = rnd();
+      g.fillStyle = v < 0.5 ? 'rgba(0,0,0,0.13)' : (v < 0.8 ? 'rgba(236,231,218,0.05)' : 'rgba(90,140,90,0.10)');
+      g.fillRect(rnd() * w, rnd() * h, 1 + rnd() * 2.5, 1 + rnd() * 2.5);
+    }
+    for (let i = 0; i < 12; i++) {
+      g.fillStyle = 'rgba(0,0,0,0.07)';
+      g.beginPath();
+      g.ellipse(rnd() * w, rnd() * h, 14 + rnd() * 30, 8 + rnd() * 18, rnd() * 3, 0, 7);
+      g.fill();
+    }
+  }, 10, 10);
+  const ribTex = canvasTexture([128, 128], (g, w, h) => {
+    g.fillStyle = '#ffffff';
+    g.fillRect(0, 0, w, h);
+    for (let x = 0; x < w; x += 16) {
+      g.fillStyle = 'rgba(0,0,0,0.17)';
+      g.fillRect(x, 0, 2, h);
+      g.fillStyle = 'rgba(255,255,255,0.06)';
+      g.fillRect(x + 2, 0, 1, h);
+    }
+    g.fillStyle = 'rgba(0,0,0,0.10)';
+    g.fillRect(0, 0, w, 2);
+    g.fillRect(0, h - 2, w, 2);
+  }, 2, 1);
+
   const materials = {};
   for (const name of Object.keys(PALETTE)) {
     materials[name] = new THREE.MeshStandardMaterial({
       color: new THREE.Color(PALETTE[name]),
       roughness: name === 'accent' ? 0.5 : 0.9,
       metalness: 0.04,
+      map: ribTex,
     });
   }
-  materials.ground = new THREE.MeshStandardMaterial({ color: new THREE.Color(PALETTE.grass), roughness: 1 });
+  materials.ground = new THREE.MeshStandardMaterial({ color: new THREE.Color('#ffffff'), roughness: 1, map: groundTex });
 
   const colliders = [];
   const shootables = [];
@@ -136,7 +189,7 @@ export function createWorld(scene) {
     const bulb = new THREE.Mesh(boxGeo(0.5, 0.18, 0.5), bulbMat);
     bulb.position.set(x, 5.45, z);
     group.add(pole, bulb);
-    const light = new THREE.PointLight(new THREE.Color(PALETTE.accent), 14, 15, 1.8);
+    const light = new THREE.PointLight(new THREE.Color(PALETTE.accent), 22, 15, 1.8);
     light.position.set(x, 5.2, z);
     group.add(light);
   }
@@ -151,12 +204,56 @@ export function createWorld(scene) {
   craneLoad.position.set(-16, 5.6, -27);
   group.add(craneLeg, craneArm, craneHook, craneLoad);
 
-  // Light: low warm sun from the west, cool sky fill, and the lamps above.
-  scene.background = new THREE.Color(PALETTE.canvas);
-  scene.fog = new THREE.Fog(new THREE.Color(PALETTE.canvas), 34, 95);
-  const sky = new THREE.HemisphereLight(new THREE.Color(PALETTE.muted), new THREE.Color(PALETTE.canvas), 1.15);
+  // Painted site boards on the north wall, one per charge site: the map names its own
+  // objectives in-world, the way a real depot is signed.
+  for (const [key, site] of Object.entries(SITES)) {
+    const signTex = canvasTexture([1024, 512], (g, w, h) => {
+      g.fillStyle = '#1d2129';
+      g.fillRect(0, 0, w, h);
+      g.strokeStyle = PALETTE.accent;
+      g.lineWidth = 12;
+      g.strokeRect(20, 20, w - 40, h - 40);
+      g.fillStyle = PALETTE.accent;
+      g.font = '900 330px system-ui, sans-serif';
+      g.textAlign = 'center';
+      g.fillText(key, 215, 395);
+      g.textAlign = 'left';
+      g.fillStyle = PALETTE.muted;
+      g.font = '600 44px system-ui, sans-serif';
+      g.fillText('CHARGE SITE', 400, 150);
+      g.fillStyle = PALETTE.ink;
+      g.font = '700 96px system-ui, sans-serif';
+      g.fillText(site.name.split('— ')[1].toUpperCase(), 396, 268);
+      g.fillStyle = PALETTE.muted;
+      g.font = '500 44px system-ui, sans-serif';
+      g.fillText('DUSKLINE DEPOT', 400, 348);
+    }, 1, 1);
+    const sign = new THREE.Mesh(
+      new THREE.PlaneGeometry(8, 4),
+      new THREE.MeshBasicMaterial({ map: signTex }),
+    );
+    sign.position.set(site.x, 2.4, -29.9);
+    group.add(sign);
+  }
+
+  // Light: low warm sun from the west, cool sky fill, and the lamps above. The sky is a
+  // dusk gradient — indigo up top melting to amber at the horizon — and the fog takes the
+  // horizon's warm mauve so the far walls melt into the sunset instead of a flat void.
+  const skyTex = canvasTexture([16, 256], (g, w, h) => {
+    const grad = g.createLinearGradient(0, 0, 0, h);
+    grad.addColorStop(0, '#141824');
+    grad.addColorStop(0.45, '#362e3d');
+    grad.addColorStop(0.72, '#7d4c36');
+    grad.addColorStop(0.88, '#c07a3d');
+    grad.addColorStop(1, '#e09a4a');
+    g.fillStyle = grad;
+    g.fillRect(0, 0, w, h);
+  }, 1, 1);
+  scene.background = skyTex;
+  scene.fog = new THREE.Fog(new THREE.Color('#5f3d33'), 40, 112);
+  const sky = new THREE.HemisphereLight(new THREE.Color(PALETTE.muted), new THREE.Color(PALETTE.canvas), 1.7);
   scene.add(sky);
-  const sun = new THREE.DirectionalLight(new THREE.Color('#ffd9a0'), 2.2);
+  const sun = new THREE.DirectionalLight(new THREE.Color('#ffd9a0'), 2.7);
   sun.position.set(-26, 30, 12);
   sun.castShadow = true;
   sun.shadow.mapSize.set(2048, 2048);

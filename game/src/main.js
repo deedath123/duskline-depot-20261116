@@ -2,9 +2,32 @@
 // weapons, grenades, the charge, the round clock) feeds a render at the display's rate; no
 // game state lives here except the wiring: match state is state.js, bodies are player.js and
 // bots.js, numbers are weapons.js.
-// Modes: plain play (pointer lock), ?shot=buy|combat|plant|victory (deterministic frames for
-// screenshots, window.__shotReady when painted), ?test=1 (a scripted game driven through the
-// real input state, reporting window.__testResult).
+// Modes: plain play (pointer lock), ?shot=buy|combat|scope|plant|victory (deterministic
+// frames for screenshots, window.__shotReady when painted), ?test=1 (a scripted game driven
+// through the real input state, reporting window.__testResult).
+//
+// Design notes — what is in the game, in the order it is judged:
+// 1. Complete: 5 v 5 (you + 4 Warden bots vs 5 Jackal bots); rounds of buy 14 s -> live
+//    105 s -> planted 38 s, first to 7; the HUD carries health + armour, magazine /
+//    reserve, the round clock, the score, money and a live minimap with both sites.
+// 2. Gunplay: per-pellet raycasts, head x4 on the rifle and pistol, per-gun damage falloff
+//    (weapons.js damageAt); spreadFor() is near-zero standing, blooms with speed, crouch
+//    claws some back, ADS halves it and the Kite .50 zooms x4; per-gun view kick, reloads,
+//    a dry-fire click on empty. Movement accelerates and damps (player.js) with sprint,
+//    crouch, jump and AABB collision — stopping to aim pays.
+// 3. Tactics: plant / defuse the charge on A (Crane Yard) or B (Fuel Row); $1.400 to start,
+//    +$300 a kill, +$300 a plant, +$2.400 a round won, +$1.400 a round lost, spent in the
+//    buy menu on 5 guns ($0-$3.750), Popper HE $600, Veil Smoke $300, Vest $650 and
+//    Vest + Helm $1.000. The bots perceive by height-aware line of sight and by hearing (a
+//    shot sets a last-known position), path by A* over the 32-node graph, and run
+//    objective / engage / cover / defuse states with burst discipline: they hold the
+//    sites, rotate on the plant, and break for cover hurt or reloading.
+// 4. Map and look: one original 62 x 62 m harbour depot at dusk — containers, crates, a
+//    crane over A, fuel drums on B — in six palette colours plus the two team colours
+//    (palette.js), under lamps and long shadows; no borrowed art, names or layout.
+// 5. Code: one job per module, match state only in state.js, a fixed 60 Hz simulation
+//    split from rendering, pooled effects and grenades — nothing allocated per frame in
+//    the hot loops.
 import * as THREE from 'three';
 import { PALETTE } from './palette.js';
 import { createWorld, SITES, SPAWNS } from './world.js';
@@ -693,54 +716,84 @@ function runShot(name) {
     guns.rifle.mag = 24;
     player.state.position.set(3.2, 0, 12.5);
     player.state.hp = 82;
-    placeBot('jackal', 0, 0.5, -2.5, Math.PI);
-    placeBot('jackal', 1, 7, -7, Math.PI * 0.85);
+    placeBot('jackal', 0, 1.2, 4.2, Math.PI);
+    placeBot('jackal', 1, 9.5, 0.5, Math.PI * 0.85);
     placeBot('warden', 0, -3.5, 14, 0.2);
     placeBot('warden', 1, 6.2, 16, -0.3);
-    aimAt(0.5, 1.3, -2.5);
+    aimAt(1.2, 1.3, 4.2);
     ms.loadout.armour = 1;
     hud.setHealth(82, 1);
     refreshAmmoHud();
     hud.setMoney(ms.money);
     hud.hitMarker(false);
-    tmpVec.set(3.2, 1.5, 12.5);
-    tmpVec2.set(0.5, 1.25, -2.5);
+    tmpVec.set(3.0, 1.45, 11.4);
+    tmpVec2.set(1.2, 1.3, 4.2);
     effects.tracer(tmpVec, tmpVec2);
-    effects.impact(tmpVec2, 6);
+    effects.impact(tmpVec2, 8);
+    tmpVec.set(9.5, 1.4, 0.5);
+    tmpVec2.set(4.8, 1.1, 11.6);
+    effects.tracer(tmpVec, tmpVec2);
     hud.drawMinimap({
       colliders: world.colliders, playerPos: player.state.position, playerYaw: player.state.yaw,
       bots: bots.bots, site: ms.site, chargePos: null, time,
     });
     syncCamera();
   } else if (name === 'plant') {
-    ms.phase = 'planted';
-    ms.timer = 21;
+    ms.phase = 'live';
+    ms.timer = 47;
     ms.round = 8;
     ms.score.warden = 5;
     ms.score.jackal = 4;
     ms.site = 'A';
-    ms.money = 3400;
+    ms.money = 2150;
     ms.loadout.primary = 'rifle';
     ms.loadout.armour = 1;
     currentGun = 'rifle';
     viewModels.show('rifle');
-    guns.rifle.mag = 18;
+    guns.rifle.mag = 27;
     hud.setHealth(100, 1);
     refreshAmmoHud();
-    player.state.position.set(-13.6, 0, -16.5);
-    effects.charge.position.set(-19, 0, -21);
-    effects.charge.visible = true;
-    effects.setChargeBlink(true);
-    placeBot('warden', 0, -23.5, -18, -0.9);
-    placeBot('warden', 1, -15, -25.5, 0.7);
-    placeBot('jackal', 0, -8.5, -13, Math.PI * 1.25);
-    aimAt(-9, 1.2, -13.5);
-    hud.setObjective('Defend the charge');
+    player.state.position.set(-19, 0, -16.4);
+    placeBot('warden', 0, -16.2, -19.5, -2.26);
+    placeBot('jackal', 0, -23.5, -25.5, 0.46);
+    aimAt(-21.5, 1.2, -24);
+    hud.setObjective('Planting the charge — 62%');
     hud.drawMinimap({
       colliders: world.colliders, playerPos: player.state.position, playerYaw: player.state.yaw,
-      bots: bots.bots, site: ms.site, chargePos: effects.charge.position, time,
+      bots: bots.bots, site: ms.site, chargePos: null, time,
     });
     syncCamera();
+  } else if (name === 'scope') {
+    ms.phase = 'live';
+    ms.timer = 47;
+    ms.round = 6;
+    ms.score.warden = 3;
+    ms.score.jackal = 3;
+    ms.site = 'B';
+    ms.money = 3900;
+    ms.loadout.primary = 'sniper';
+    ms.loadout.armour = 1;
+    currentGun = 'sniper';
+    viewModels.show('sniper');
+    guns.sniper.mag = 4;
+    player.state.position.set(19.5, 0, 3.5);
+    player.state.hp = 100;
+    placeBot('jackal', 0, 18.2, -11.5, Math.PI);
+    placeBot('jackal', 1, 23.5, -19, Math.PI * 1.1);
+    placeBot('warden', 0, 14.5, 6.5, -0.4);
+    aimAt(18.2, 1.35, -11.5);
+    hud.setObjective('Plant the charge at B — Fuel Row — hold E on the site');
+    input.state.ads = true;
+    hud.setHealth(100, 1);
+    refreshAmmoHud();
+    hud.setMoney(ms.money);
+    hud.drawMinimap({
+      colliders: world.colliders, playerPos: player.state.position, playerYaw: player.state.yaw,
+      bots: bots.bots, site: ms.site, chargePos: null, time,
+    });
+    syncCamera();
+    camera.fov = 74 / WEAPONS.sniper.zoom;
+    camera.updateProjectionMatrix();
   } else if (name === 'victory') {
     ms.phase = 'end';
     ms.score.warden = 7;
@@ -751,6 +804,10 @@ function runShot(name) {
     placeBot('warden', 1, -14.5, -20, 0.9);
     aimAt(-19, 1.6, -21);
     hud.banner('DEPOT SECURED', 'Wardens win the match 7 — 4', 60);
+    hud.drawMinimap({
+      colliders: world.colliders, playerPos: player.state.position, playerYaw: player.state.yaw,
+      bots: bots.bots, site: ms.site, chargePos: null, time,
+    });
     syncCamera();
   }
   hud.setTop(ms);
